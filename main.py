@@ -24,11 +24,43 @@ ip_blocklist = {}
 # {username: block_until_timestamp}
 username_blocklist = {}
 
+# {ip: {endpoint: [timestamps]...}}
+ip_endpoint_log = defaultdict(lambda: defaultdict(list))
+
+# IPs that hit the honeypot
+honeypot_hits = set()
+
 # Configuration
 RATE_LIMIT_WINDOW  = 60   # seconds
 RATE_LIMIT_MAX     = 5    # max attempts per window
 LOCKOUT_THRESHOLD  = 10   # max attempts before block
 BLOCK_DURATION     = 300  # seconds (5 min)
+ENDPOINT_RATE_WINDOW = 10 # seconds
+ENDPOINT_RATE_MAX    = 8  # max hits per endpoint per window
+
+# Known scraper user agents (simplified)
+SCRAPER_USER_AGENTS = [
+    "python-requests",
+    "curl",
+    "wget",
+    "bot",
+    "spider",
+    "crawler",
+    "scraper",
+    "httpclient",
+    "java",
+    "ruby",
+    "php",
+    "go-http-client",
+    "libwww-perl",
+    "httpx",
+    "axios",
+    "fetch",
+    "okhttp",
+    "httpclient",
+    "httpie",
+    "postmanruntime",
+]
 
 # ─── Rate Limiting & Lockout Helpers ──────────────────────────────────────────
 
@@ -77,10 +109,63 @@ def record_failed_attempt(ip: str, username: str):
 def time_remaining(block_until: float) -> int:
     return max(0, int(block_until - time.time()))
 
+# ─── Scraper Detection Helper ─────────────────────────────────────────────────────────
+def is_bad_user_agent(ua: str) -> bool:
+    if not ua or ua.strip() == "":
+        return True
+    ua_lower = ua.lower()
+    return any(bot in ua_lower for bot in SCRAPER_USER_AGENTS)
+
+def has_no_referer(referer: str) -> bool:
+    return not referer or referer.strip() == ""
+
+def is_endpoint_abused(ip: str, endpoint: str) -> bool:
+    now = time.time()
+    ip_endpoint_log[ip][endpoint] = [t for t in ip_endpoint_log[ip][endpoint] if now - t < ENDPOINT_RATE_WINDOW]
+    ip_endpoint_log[ip][endpoint].append(now)
+    return len(ip_endpoint_log[ip][endpoint]) >= ENDPOINT_RATE_MAX
+
+def check_scraper(ip: str, endpoint: str) -> dict | None:
+    ua = request.headers.get("User-Agent", "")
+    referer = request.headers.get("Referer", "")
+
+    # 1. Honeypot check
+    if ip in honeypot_hits:
+        print(f"[BotDetector] Honeypot-flagged IP attempt: {ip} on {endpoint}")
+        return {
+            "blocked": True,
+            "reason": "Suspicious activity detected (honeypot hit)",
+            "score": 100
+        }
+    
+    # 2. Bad User-Agent check
+    if is_bad_user_agent(ua):
+        print(f"[BotDetector] Bad User-Agent detected: {ua} from IP {ip}")
+        ip_blocklist[ip] = time.time() + BLOCK_DURATION
+        return {
+            "blocked": True,
+            "reason": "Suspicious User-Agent detected",
+            "score": 80
+        }
+    # 3. No referer on login endpoint
+    if endpoint == "/login" and has_no_referer(referer):
+        print(f"[BotDetector] No referer on login attempt from IP {ip}")
+    
+    # 4. Endpoint abuse check
+    if is_endpoint_abused(ip, endpoint):
+        print(f"[BotDetector] Endpoint abuse detected: {endpoint} from IP {ip}")
+        ip_blocklist[ip] = time.time() + BLOCK_DURATION
+        return {
+            "blocked": True,
+            "reason": "Too many requests to this endpoint",
+            "score": 100
+        }
+    return None
+
 
 # ─── Scoring Engine ───────────────────────────────────────────────────────────
 
-def score_behavior(data: dict) -> dict:
+def score_behavior(data: dict, ip: str) -> dict:
     score = 0
     flags = []
 
@@ -89,6 +174,7 @@ def score_behavior(data: dict) -> dict:
     click_positions = data.get("clickPositions", [])
     focus_time      = data.get("formFocusTime")
     submit_time     = data.get("formSubmitTime")
+    referer         = request.headers.get("Referer", "")
 
     # 1. Mouse movement checks
     if len(mouse_moves) == 0:
@@ -136,6 +222,11 @@ def score_behavior(data: dict) -> dict:
         score += 10
         flags.append("no_clicks_recorded")
 
+    # 5. No referer penalty
+    if not referer.strip():
+        score += 10
+        flags.append("no_referer")
+
     return {"score": min(score, 100), "flags": flags}
 
 
@@ -182,6 +273,15 @@ def coefficient_of_variation(data: list) -> float:
 def index():
     return render_template("login.html")
 
+@app.route("/honeypot-api")
+@app.route("/api/data")
+@app.route("/admin/users")
+@app.route("/config")
+def honeypot():
+    ip = request.remote_addr
+    honeypot_hits.add(ip)
+    print(f"[BotDetector] Honeypot hit: {ip} on {request.path}")
+    return jsonify({"message": "This endpoint does not exist."}), 404
 
 @app.route("/login", methods=["POST"])
 def login():
@@ -190,7 +290,12 @@ def login():
     password = request.form.get("password", "")
     raw_behavior = request.form.get("behavior_data", "{}")
 
-    # 1. IP block check
+    # 1. Scraper check
+    scraper_result = check_scraper(ip, "/login")
+    if scraper_result:
+        return jsonify(scraper_result), 403
+
+    # 2. IP block check
     if is_ip_blocked(ip):
         sec = time_remaining(ip_blocklist[ip])
         print(f"[BotDetector] Blocked IP attempt: {ip}")
@@ -201,7 +306,7 @@ def login():
             "time_remaining": sec
         }), 429
 
-    # 2. Account block check
+    # 3. Account block check
     if username and is_username_blocked(username):
         sec = time_remaining(username_blocklist[username])
         print(f"[BotDetector] Blocked account attempt: {username}")
@@ -212,7 +317,7 @@ def login():
             "time_remaining": sec
         }), 429
 
-    # 3. Rate limit check
+    # 4. Rate limit check
     if is_rate_limited(ip):
         print(f"[BotDetector] Rate limited IP: {ip}")
         return jsonify({
@@ -222,17 +327,17 @@ def login():
             "retry_after": RATE_LIMIT_WINDOW
         }), 429
 
-    # 4. Record attempt
+    # 5. Record attempt
     record_attempt(ip, username)
 
-    # 5. Parse behavior data
+    # 6. Parse behavior data
     try:
         behavior_data = json.loads(raw_behavior)
     except json.JSONDecodeError:
         return jsonify({"error": "Invalid behavior data format", "blocked": True}), 400
 
-    # 6. Score behavior
-    result = score_behavior(behavior_data)
+    # 7. Score behavior
+    result = score_behavior(behavior_data, ip)
     score  = result["score"]
     flags  = result["flags"]
 
