@@ -110,6 +110,10 @@
     <input type="text"     name="username"      placeholder="Username" required />
     <input type="password" name="password"      placeholder="Password" required />
     <input type="hidden"   name="behavior_data" id="behaviorData" />
+    <!-- Honeypot field — hidden from real users, bots will fill it -->
+    <input type="text" name="website" id="website"
+      style="display:none; position:absolute; left:-9999px;"
+      tabindex="-1" autocomplete="off" />
     <button type="submit">Login</button>
   </form>
 
@@ -176,9 +180,19 @@
           }, 1000);
         } else if (result.rate_limited) {
           showPopup('blocked', '😖', 'Slow Down!', 'Too many attempts. Please wait before trying again.');
+        } else if (result.stuffing) {
+          showPopup('blocked', '🚨', 'Attack Detected!', result.reason || 'Credential stuffing detected.');
+        } else if (result.spam) {
+          if (result.disposable_email) {
+            showPopup('blocked', '📧', 'Invalid Email!', 'Disposable email addresses are strictly not allowed.');
+          } else {
+            showPopup('blocked', '🤖', 'Spam Detected!', result.reason || 'Spam behavior was detected.');
+          }
         } else {
           showPopup('blocked', '😭', 'Bot Detected!', result.reason || 'Suspicious behavior was detected.');
         }
+      } else if (result.breached_password) {
+        showPopup('warning', '⚠️', 'Weak Password!', 'This password has been seen in data breaches. Consider changing it.');
       } else if (result.warning) {
         showPopup('warning', '😵‍💫', 'Warning', `Behavior is somewhat suspicious. (Score: ${result.score})`);
       } else {
