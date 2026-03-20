@@ -136,11 +136,6 @@ Bot-Detector/
 
 ---
 
-##  CV Description
-
-> Developed a web traffic bot detection and monitoring system that identifies suspicious activity using IP rate analysis and user-agent inspection. Implemented logging and alert mechanisms to simulate SOC-style monitoring and analysed potential attack patterns such as brute-force and automated scraping.
-
----
 
 ##  Author
 **Akshat**  
