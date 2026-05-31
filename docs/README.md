@@ -139,4 +139,4 @@ Bot-Detector/
 
 ##  Author
 **Akshat**  
-Aspiring Cybersecurity Analyst  
+Aspiring Cybersecurity Engineer
