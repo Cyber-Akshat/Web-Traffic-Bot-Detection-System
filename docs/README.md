@@ -16,7 +16,8 @@ The system monitors incoming traffic, applies detection rules, logs activity, an
 - Detect abnormal web traffic patterns  
 - Identify automated/bot behaviour  
 - Simulate real-world SOC monitoring  
-- Provide basic threat analysis and logging  
+- Provide basic threat analysis and logging
+- Storing the basic information into a database without breaching DPA (Data Protection Act) act
 
 ---
 
