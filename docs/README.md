@@ -140,3 +140,7 @@ Bot-Detector/
 ##  Author
 **Akshat**  
 Aspiring Cybersecurity Engineer
+## Help
+**AI Use**
+- Claude for design
+- understand the science of how traffic can be designed
